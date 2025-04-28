@@ -17,7 +17,7 @@ import scala.concurrent.duration.DurationInt
 
 object CopyS3 {
 
-  private def extractTag[F[_], XmlEvent](
+  def extractTag[F[_], XmlEvent](
       tag: String
   ): Pipe[F, XmlEvent, List[XmlEvent]] = {
 
@@ -51,10 +51,10 @@ object CopyS3 {
     (in: Stream[F, XmlEvent]) => go(in, (false, List[XmlEvent]())).stream
   }
 
-  private def xmlElementstoString(xmlEvents: List[XmlEvent]) =
+  def xmlElementstoString(xmlEvents: List[XmlEvent]) =
     xmlEvents.map(_.show).mkString("").filter(_ != '\n')
 
-  private def group[T](n: Int)(in: Stream[IO, T]): Stream[IO, List[T]] = {
+  def group[T](n: Int)(in: Stream[IO, T]): Stream[IO, List[T]] = {
     val t = in.take(n).compile.toList.unsafeRunSync()
     t.size match {
       case s if s < n => Stream.emit(t)
@@ -73,7 +73,7 @@ object CopyS3 {
 
   private val s3Prefix = "s3://"
 
-  private def extractBucketNameAndFileKey(
+  def extractBucketNameAndFileKey(
       source: String
   ): Either[String, (BucketName, FileKey)] =
     if (
@@ -95,7 +95,7 @@ object CopyS3 {
       }
     }
 
-  private def destinationFileKey(source: FileKey, n: Long): FileKey = {
+  def destinationFileKey(source: FileKey, n: Long): FileKey = {
     val sourceStr = source.value.value
     val i = sourceStr.lastIndexOf(".")
     val destinationStr =
