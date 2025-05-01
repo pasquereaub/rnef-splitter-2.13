@@ -1,14 +1,18 @@
 import cats.effect.unsafe.implicits.global
 import cats.effect.{IO, Resource}
 import cats.implicits.toShow
+import eu.timepit.refined._
+import eu.timepit.refined.auto._
 import eu.timepit.refined.collection.NonEmpty
-import eu.timepit.refined.refineV
 import fs2.aws.s3.S3
 import fs2.aws.s3.models.Models.{BucketName, FileKey}
 import fs2.data.xml.XmlEvent.{EndTag, StartTag}
 import fs2.data.xml.{XmlEvent, events}
 import fs2.{Pipe, Pull, Stream}
-import io.laserdisc.pure.s3.tagless.{S3AsyncClientOp, Interpreter => S3Interpreter}
+import io.laserdisc.pure.s3.tagless.{
+  S3AsyncClientOp,
+  Interpreter => S3Interpreter
+}
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.s3.S3AsyncClient
 
@@ -58,7 +62,7 @@ object CopyS3 {
     val t = in.take(n).compile.toList.unsafeRunSync()
     t.size match {
       case s if s < n => Stream.emit(t)
-      case _ => Stream.emit(t) ++ group(n)(in.drop(n))
+      case _          => Stream.emit(t) ++ group(n)(in.drop(n))
     }
   }
 
@@ -128,7 +132,7 @@ object CopyS3 {
               .map(S3.create[IO])
               .use { s3 =>
                 val csv = s3
-                  .readFile(sourceBucket, sourceKey)
+                  .readFileMultipart(sourceBucket, sourceKey, 10)
                   .through(fs2.text.decodeWithCharset(StandardCharsets.UTF_8))
                   .through(fs2.text.lines)
                   .map(_.filter(_ != '\n'))
@@ -137,8 +141,11 @@ object CopyS3 {
                   .map(xmlElementstoString)
                   .prefetch
                   // .chunkN(1000) not lazy, seems to load the whole file before starting to emit chunks
-                  .groupWithin(1000, 1.second) // only create Chunks of 1 for now
-                  //.through(group(1000)) not lazy
+                  .groupWithin(
+                    1000,
+                    1.second
+                  ) // only create Chunks of 1 for now
+                // .through(group(1000)) not lazy
                 csv.zipWithIndex
                   // could also use prefetch here
                   // could try parEvalMap
