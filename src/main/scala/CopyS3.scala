@@ -6,9 +6,10 @@ import eu.timepit.refined.auto._
 import eu.timepit.refined.collection.NonEmpty
 import fs2.aws.s3.S3
 import fs2.aws.s3.models.Models.{BucketName, FileKey}
+import fs2.data.text.utf8.byteStreamCharLike
+import fs2.data.xml.XmlEvent
 import fs2.data.xml.XmlEvent.{EndTag, StartTag}
-import fs2.data.xml.{XmlEvent, events}
-import fs2.{Pipe, Pull, Stream}
+import fs2.{Collector, Pipe, Pull, Stream}
 import io.laserdisc.pure.s3.tagless.{
   S3AsyncClientOp,
   Interpreter => S3Interpreter
@@ -16,7 +17,6 @@ import io.laserdisc.pure.s3.tagless.{
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.s3.S3AsyncClient
 
-import java.nio.charset.StandardCharsets
 import scala.concurrent.duration.DurationInt
 
 object CopyS3 {
@@ -115,11 +115,21 @@ object CopyS3 {
       )
   }
 
+  def lineCollector(): Collector.Aux[XmlEvent, String] =
+    new Collector[XmlEvent] {
+      type Out = String
+      def newBuilder: Collector.Builder[XmlEvent, Out] =
+        new LineRenderer()
+    }
+
   def apply(source: String, destination: String): Option[String] = {
     val bucketNameAndFileKey = extractBucketNameAndFileKey(source)
     val destinationBucketNameAndFileKey = extractBucketNameAndFileKey(
       destination
     )
+    import fs2.data.xml._
+    import fs2.data.xml.xpath.literals._
+    val path = xpath"//resnet"
 
     (bucketNameAndFileKey, destinationBucketNameAndFileKey) match {
       case (
@@ -133,23 +143,25 @@ object CopyS3 {
               .use { s3 =>
                 val csv = s3
                   .readFileMultipart(sourceBucket, sourceKey, 10)
-                  .through(fs2.text.decodeWithCharset(StandardCharsets.UTF_8))
-                  .through(fs2.text.lines)
-                  .map(_.filter(_ != '\n'))
-                  .through(events[IO, String]())
-                  .through(extractTag("resnet"))
-                  .map(xmlElementstoString)
+                  .through(events[IO, Byte]())
+                  .through(
+                    xpath.filter.collect(
+                      path,
+                      lineCollector,
+                      deterministic = false,
+                      maxNest = 0
+                    )
+                  )
                   .prefetch
                   // .chunkN(1000) not lazy, seems to load the whole file before starting to emit chunks
                   .groupWithin(
-                    1000,
+                    10000,
                     1.second
-                  ) // only create Chunks of 1 for now
-                // .through(group(1000)) not lazy
+                  )
                 csv.zipWithIndex
                   // could also use prefetch here
                   // could try parEvalMap
-                  .evalMap { case (s, i) =>
+                  .parEvalMap(4) { case (s, i) =>
                     val oFileKey = destinationFileKey(destinationKey, i)
                     // use cats logging instead
                     (IO(
