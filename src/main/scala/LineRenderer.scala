@@ -5,8 +5,8 @@
  */
 
 import cats.syntax.all._
-import fs2.{Chunk, Collector, Pipe, Stream}
 import fs2.data.xml.XmlEvent
+import fs2.{Chunk, Collector}
 
 class LineRenderer() extends Collector.Builder[XmlEvent, String] {
 
@@ -54,24 +54,5 @@ class LineRenderer() extends Collector.Builder[XmlEvent, String] {
 
   override def result: String =
     builder.result().filter('\n' != _) /// make sure the string is on one line
-
-}
-
-object LineRenderer {
-
-  def pipe[F[_]](
-      pretty: Boolean,
-      collapseEmpty: Boolean,
-      indent: String,
-      attributeThreshold: Int
-  ): Pipe[F, XmlEvent, String] =
-    in =>
-      Stream.suspend(Stream.emit(new LineRenderer())).flatMap { builder =>
-        in.mapChunks { chunk =>
-          builder += chunk
-          Chunk.singleton(builder.result)
-        }
-
-      }
 
 }
