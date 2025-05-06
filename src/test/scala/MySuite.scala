@@ -191,30 +191,39 @@ class MySuite extends munit.FunSuite {
   }
 
   test("destinationFileKey with a short key") {
-    val source = FileKey(toRefinedName("key"))
-    val expected = FileKey(toRefinedName("key-1.csv"))
+    val source = FileKey(toRefinedName("key.rnef"))
+    val expected = FileKey(toRefinedName("key.rnef/tag/key-1.txt"))
 
-    assertEquals(CopyS3.destinationFileKey(source, 1), expected)
+    assertEquals(CopyS3.destinationFileKey(source, "tag", 1), expected)
   }
 
   test("destinationFileKey with a long key") {
-    val source = FileKey(toRefinedName("path/key.csv"))
-    val expected = FileKey(toRefinedName("path/key-1.csv"))
+    val source = FileKey(toRefinedName("path/key.rnef"))
+    val expected = FileKey(toRefinedName("path/key.rnef/tag/key-1.txt"))
 
-    assertEquals(CopyS3.destinationFileKey(source, 1), expected)
+    assertEquals(CopyS3.destinationFileKey(source, "tag", 1), expected)
   }
 
   test("destinationFileKey without extension") {
     val source = FileKey(toRefinedName("path/key"))
-    val expected = FileKey(toRefinedName("path/key-1.csv"))
+    val expected = FileKey(toRefinedName("path/key/tag/key-1.txt"))
 
-    assertEquals(CopyS3.destinationFileKey(source, 1), expected)
+    assertEquals(CopyS3.destinationFileKey(source, "tag", 1), expected)
+  }
+
+  test("successFileKey happy path") {
+    val source = FileKey(toRefinedName("path/key.rnef"))
+    val expected = FileKey(toRefinedName("path/key.rnef/tag/_SUCCESS"))
+
+    assertEquals(CopyS3.successFileKey(source, "tag"), expected)
   }
 
   test("CopyS3 incorrect tag") {
     val uri = "s3://bucket/key"
     val error =
-      "Error invalid xpath: fs2.data.xml.xpath.XPathSyntaxException: unexpected '+' at index 2, node selector was expected"
-    assertEquals(CopyS3(uri, uri, "+"), Some(error))
+      Some(
+        "Error invalid xpath: fs2.data.xml.xpath.XPathSyntaxException: unexpected '+' at index 2, node selector was expected"
+      )
+    assertEquals(CopyS3(uri, uri, "+"), error)
   }
 }

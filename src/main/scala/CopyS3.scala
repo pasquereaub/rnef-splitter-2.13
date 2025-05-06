@@ -2,14 +2,14 @@ import cats.effect.unsafe.implicits.global
 import cats.effect.{IO, Resource}
 import cats.implicits.toShow
 import eu.timepit.refined._
-import eu.timepit.refined.auto._
+//import eu.timepit.refined.auto._ needed for readFileMultipart
 import eu.timepit.refined.collection.NonEmpty
 import fs2.aws.s3.S3
 import fs2.aws.s3.models.Models.{BucketName, FileKey}
 import fs2.data.text.utf8.byteStreamCharLike
-import fs2.data.xml.XmlEvent
 import fs2.data.xml.XmlEvent.{EndTag, StartTag}
 import fs2.data.xml.xpath.XPathParser
+import fs2.data.xml.{XmlEvent, events, xpath}
 import fs2.{Collector, Pipe, Pull, Stream}
 import io.laserdisc.pure.s3.tagless.{
   S3AsyncClientOp,
@@ -17,6 +17,8 @@ import io.laserdisc.pure.s3.tagless.{
 }
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.s3.S3AsyncClient
+
+import java.nio.file.{Path, Paths}
 
 object CopyS3 {
 
@@ -98,18 +100,34 @@ object CopyS3 {
       }
     }
 
-  def destinationFileKey(source: FileKey, n: Long): FileKey = {
+  def destinationFileKey(source: FileKey, tag: String, n: Long): FileKey = {
     val sourceStr = source.value.value
     val i = sourceStr.lastIndexOf(".")
-    val destinationStr =
-      if (i < 0) s"$sourceStr-$n.csv"
-      else s"${sourceStr.substring(0, i)}-$n.csv"
+    val destinationPrefix =
+      if (i < 0) sourceStr
+      else sourceStr.substring(0, i)
+    val name = Paths.get(destinationPrefix).getFileName
+    val destinationStr = Path.of(sourceStr, tag, s"$name-$n.txt").toString
     refineV[NonEmpty](destinationStr)
       .map(FileKey.apply)
       .getOrElse(
         // by construction the string should never be empty
         throw new IllegalArgumentException(
-          "Invalid NonEmptyString for fileKey"
+          s"Invalid NonEmptyString '$destinationStr'"
+        )
+      )
+  }
+
+  def successFileKey(source: FileKey, tag: String): FileKey = {
+    val sourceStr = source.value.value
+    val name = Paths.get(sourceStr).getParent.getFileName
+    val ret = Path.of(sourceStr, tag, "_SUCCESS").toString
+    refineV[NonEmpty](ret)
+      .map(FileKey.apply)
+      .getOrElse(
+        // by construction the string should never be empty
+        throw new IllegalArgumentException(
+          s"Invalid NonEmptyString '$ret'"
         )
       )
   }
@@ -130,8 +148,7 @@ object CopyS3 {
     val destinationBucketNameAndFileKey = extractBucketNameAndFileKey(
       destination
     )
-    import fs2.data.xml._
-    import fs2.data.xml.xpath.literals._
+
     val parsedXPath = XPathParser.either("//" + tag)
 
     (bucketNameAndFileKey, destinationBucketNameAndFileKey, parsedXPath) match {
@@ -146,7 +163,8 @@ object CopyS3 {
               .map(S3.create[IO])
               .use { s3 =>
                 val csv = s3
-                  .readFileMultipart(sourceBucket, sourceKey, 10)
+                  .readFile(sourceBucket, sourceKey)
+                  //                  .readFileMultipart(sourceBucket, sourceKey, partSize = 16)
                   .through(events[IO, Byte]())
                   .through(
                     xpath.filter.collect(
@@ -162,7 +180,7 @@ object CopyS3 {
                   // could try parEvalMap
                   .prefetchN(1)
                   .parEvalMapUnordered(1) { case (s, i) =>
-                    val oFileKey = destinationFileKey(destinationKey, i)
+                    val oFileKey = destinationFileKey(destinationKey, tag, i)
                     // use cats logging instead
                     (IO(
                       println(
@@ -181,10 +199,27 @@ object CopyS3 {
                           .drain)
                   }
                   .compile
-                  .drain
+                  .count
 
-              })
-          .unsafeRunSync()
+              }
+              .flatMap(count =>
+                s3StreamResource
+                  .map(S3.create[IO])
+                  .use { s3 =>
+                    Stream
+                      .emits(count.toString.getBytes("UTF-8"))
+                      .lift[IO]
+                      .through(
+                        s3.uploadFile(
+                          destinationBucket,
+                          successFileKey(destinationKey, tag)
+                        )
+                      )
+                      .compile
+                      .string
+
+                  }
+              )).unsafeRunSync()
         None
 
       case (Left(error), _, _) =>
