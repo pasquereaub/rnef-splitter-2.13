@@ -256,7 +256,7 @@ object CopyS3 {
                       *>
                         Stream
                           .emits(
-                            s.toString()
+                            s.to(Collector.string)
                               .getBytes(StandardCharsets.UTF_8)
                           )
                           .through(
