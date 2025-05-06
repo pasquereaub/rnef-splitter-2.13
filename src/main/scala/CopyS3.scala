@@ -2,7 +2,7 @@ import cats.effect.unsafe.implicits.global
 import cats.effect.{IO, Resource}
 import cats.implicits.toShow
 import eu.timepit.refined._
-//import eu.timepit.refined.auto._ needed for readFileMultipart
+import eu.timepit.refined.auto._
 import eu.timepit.refined.collection.NonEmpty
 import fs2.aws.s3.S3
 import fs2.aws.s3.models.Models.{BucketName, FileKey}
@@ -18,6 +18,7 @@ import io.laserdisc.pure.s3.tagless.{
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.s3.S3AsyncClient
 
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Path, Paths}
 
 object CopyS3 {
@@ -56,7 +57,7 @@ object CopyS3 {
     (in: Stream[F, XmlEvent]) => go(in, (false, List[XmlEvent]())).stream
   }
 
-  def xmlElementstoString(xmlEvents: List[XmlEvent]) =
+  def xmlElementstoString(xmlEvents: List[XmlEvent]): String =
     xmlEvents.map(_.show).mkString("").filter(_ != '\n')
 
   def group[T](n: Int)(in: Stream[IO, T]): Stream[IO, List[T]] = {
@@ -100,14 +101,19 @@ object CopyS3 {
       }
     }
 
-  def destinationFileKey(source: FileKey, tag: String, n: Long): FileKey = {
+  def destinationFileKey(
+      source: FileKey,
+      tag: String,
+      n: Long = -1
+  ): FileKey = {
     val sourceStr = source.value.value
     val i = sourceStr.lastIndexOf(".")
     val destinationPrefix =
       if (i < 0) sourceStr
       else sourceStr.substring(0, i)
     val name = Paths.get(destinationPrefix).getFileName
-    val destinationStr = Path.of(sourceStr, tag, s"$name-$n.txt").toString
+    val extension = if (n < 0) ".txt" else s"-$n.txt"
+    val destinationStr = Path.of(sourceStr, tag, s"$name$extension").toString
     refineV[NonEmpty](destinationStr)
       .map(FileKey.apply)
       .getOrElse(
@@ -120,7 +126,6 @@ object CopyS3 {
 
   def successFileKey(source: FileKey, tag: String): FileKey = {
     val sourceStr = source.value.value
-    val name = Paths.get(sourceStr).getParent.getFileName
     val ret = Path.of(sourceStr, tag, "_SUCCESS").toString
     refineV[NonEmpty](ret)
       .map(FileKey.apply)
@@ -132,14 +137,75 @@ object CopyS3 {
       )
   }
 
-  def lineCollector(): Collector.Aux[XmlEvent, String] =
+  private def lineCollector(): Collector.Aux[XmlEvent, String] =
     new Collector[XmlEvent] {
       type Out = String
       def newBuilder: Collector.Builder[XmlEvent, Out] =
         new LineRenderer()
     }
 
-  def apply(
+  def oneFile(
+      source: String,
+      destination: String,
+      tag: String = "resnet"
+  ): Option[String] = {
+    val bucketNameAndFileKey = extractBucketNameAndFileKey(source)
+    val destinationBucketNameAndFileKey = extractBucketNameAndFileKey(
+      destination
+    )
+
+    val parsedXPath = XPathParser.either("//" + tag)
+
+    (bucketNameAndFileKey, destinationBucketNameAndFileKey, parsedXPath) match {
+      case (
+            Right((sourceBucket, sourceKey)),
+            Right((destinationBucket, destinationKey)),
+            Right(path)
+          ) =>
+
+        s3StreamResource
+          .map(S3.create[IO])
+          .use { s3: S3[IO] =>
+            s3
+              .readFile(sourceBucket, sourceKey)
+              //                  .readFileMultipart(sourceBucket, sourceKey, partSize = 16)
+              .through(events[IO, Byte]())
+              .through(
+                xpath.filter.collect(
+                  path,
+                  lineCollector(),
+                  deterministic = false,
+                  maxNest = 0
+                )
+              )
+              .flatMap { s: String =>
+                Stream.emits(s.getBytes(StandardCharsets.UTF_8))
+              }
+              .through(
+                s3.uploadFileMultipart(
+                  destinationBucket,
+                  destinationFileKey(destinationKey, tag),
+                  5
+                )
+              )
+              .compile
+              .drain
+          }
+          .unsafeRunSync()
+        None
+
+      case (Left(error), _, _) =>
+        Some(s"Error: $error")
+
+      case (_, Left(error), _) =>
+        Some(s"Error: $error")
+
+      case (_, _, Left(error)) =>
+        Some(s"Error invalid xpath: $error")
+    }
+  }
+
+  def split(
       source: String,
       destination: String,
       tag: String = "resnet"
@@ -169,7 +235,7 @@ object CopyS3 {
                   .through(
                     xpath.filter.collect(
                       path,
-                      lineCollector,
+                      lineCollector(),
                       deterministic = false,
                       maxNest = 0
                     )
@@ -190,7 +256,8 @@ object CopyS3 {
                       *>
                         Stream
                           .emits(
-                            s.toList.reduce(_ + "\n" + _).getBytes("UTF-8")
+                            s.toString()
+                              .getBytes(StandardCharsets.UTF_8)
                           )
                           .through(
                             s3.uploadFile(destinationBucket, oFileKey)

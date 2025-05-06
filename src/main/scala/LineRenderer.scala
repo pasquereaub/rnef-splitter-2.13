@@ -8,7 +8,7 @@ import cats.syntax.all._
 import fs2.data.xml.XmlEvent
 import fs2.{Chunk, Collector}
 
-class LineRenderer() extends Collector.Builder[XmlEvent, String] {
+class LineRenderer extends Collector.Builder[XmlEvent, String] {
 
   private val builder = new StringBuilder
 
@@ -53,6 +53,8 @@ class LineRenderer() extends Collector.Builder[XmlEvent, String] {
   }
 
   override def result: String =
-    builder.result().filter('\n' != _) /// make sure the string is on one line
+    builder
+      .result()
+      .filter('\n' != _) + "\n" /// make sure the string is on one line
 
 }

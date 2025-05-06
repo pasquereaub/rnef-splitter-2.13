@@ -211,6 +211,13 @@ class MySuite extends munit.FunSuite {
     assertEquals(CopyS3.destinationFileKey(source, "tag", 1), expected)
   }
 
+  test("destinationFileKey with a long key and no index") {
+    val source = FileKey(toRefinedName("path/key.rnef"))
+    val expected = FileKey(toRefinedName("path/key.rnef/tag/key.txt"))
+
+    assertEquals(CopyS3.destinationFileKey(source, "tag"), expected)
+  }
+
   test("successFileKey happy path") {
     val source = FileKey(toRefinedName("path/key.rnef"))
     val expected = FileKey(toRefinedName("path/key.rnef/tag/_SUCCESS"))
@@ -224,6 +231,6 @@ class MySuite extends munit.FunSuite {
       Some(
         "Error invalid xpath: fs2.data.xml.xpath.XPathSyntaxException: unexpected '+' at index 2, node selector was expected"
       )
-    assertEquals(CopyS3(uri, uri, "+"), error)
+    assertEquals(CopyS3.split(uri, uri, "+"), error)
   }
 }
