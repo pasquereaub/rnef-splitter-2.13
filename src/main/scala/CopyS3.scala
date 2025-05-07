@@ -178,9 +178,7 @@ object CopyS3 {
                   maxNest = 0
                 )
               )
-              .flatMap { s: String =>
-                Stream.emits(s.getBytes(StandardCharsets.UTF_8))
-              }
+              .through(fs2.text.utf8.encode)
               .through(
                 s3.uploadFileMultipart(
                   destinationBucket,
