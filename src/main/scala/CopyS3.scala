@@ -167,8 +167,8 @@ object CopyS3 {
           .map(S3.create[IO])
           .use { s3: S3[IO] =>
             s3
-              .readFile(sourceBucket, sourceKey)
-              //                  .readFileMultipart(sourceBucket, sourceKey, partSize = 16)
+              //.readFile(sourceBucket, sourceKey)
+              .readFileMultipart(sourceBucket, sourceKey, partSize = 16)
               .through(events[IO, Byte]())
               .through(
                 xpath.filter.collect(
@@ -183,7 +183,7 @@ object CopyS3 {
                 s3.uploadFileMultipart(
                   destinationBucket,
                   destinationFileKey(destinationKey, tag),
-                  5
+                  16
                 )
               )
               .compile
